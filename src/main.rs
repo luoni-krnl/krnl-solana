@@ -1,5 +1,5 @@
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
-use base64::decode;
+use base64::{decode, encode};
 use log::info;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,7 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
     let solana_url = "http://127.0.0.1:8899";
 
     let body_json = req_body.into_inner();
-    let body: RequestBody = match serde_json::from_value(body_json) {
+    let mut body: RequestBody = match serde_json::from_value(body_json) {
         Ok(body) => body,
         Err(err) => {
             let error_message = format!("Failed to deserialize request body: {}", err);
@@ -135,14 +135,20 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
         let separator = b':';
 
         if let Some(pos) = decoded_data.iter().position(|&byte| byte == separator) {
-            let custom_data_part = &decoded_data[pos + 1..];
+            let fass_request_part = &decoded_data[pos + 1..];
+            let tx_part = &decoded_data[..pos];
+            let encoded_tx_part = encode(tx_part);
 
-            if let Ok(custom_data_str) = str::from_utf8(custom_data_part) {
+            if let Some(param_mut) = body.params.get_mut(0) {
+                *param_mut = Value::String(encoded_tx_part);
+            }
+
+            if let Ok(fass_request_str) = str::from_utf8(fass_request_part) {
                 let messages: Vec<String> =
-                    custom_data_str.split(':').map(|s| s.to_string()).collect();
+                    fass_request_str.split(':').map(|s| s.to_string()).collect();
 
-                let custom_data = FaasMessage { messages };
-                for message in custom_data.messages.iter() {
+                let fass_request = FaasMessage { messages };
+                for message in fass_request.messages.iter() {
                     println!("Message: {:?}", message);
                 }
             } else {
