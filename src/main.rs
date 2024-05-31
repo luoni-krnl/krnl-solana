@@ -1,10 +1,13 @@
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
+use base64::decode;
 use log::info;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 use std::error::Error;
+use std::str;
+use std::string::String;
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize)]
@@ -15,13 +18,17 @@ pub struct RequestBody {
     params: serde_json::Value,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 struct TxRequest {
     accessToken: String,
     message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+struct FaasMessage {
+    messages: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 struct SignatureToken {
     signatureToken: String,
     hash: String,
@@ -65,10 +72,9 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
         }
     };
 
-    println!("method {:?}", body.method);
+    println!("method: {:?}", body.method);
 
     if body.method == "krnl_transactionRequest" {
-        println!("params {:?}", body.params);
         let tx_request: Vec<TxRequest> = match serde_json::from_value(body.params.clone()) {
             Ok(tx_request) => tx_request,
             Err(err) => {
@@ -77,7 +83,6 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
                 return HttpResponse::BadRequest().body(error_message);
             }
         };
-        println!("access_token {:?}", tx_request[0]);
 
         let tx_request_payload = match serde_json::to_vec(&tx_request[0]) {
             Ok(payload) => payload,
@@ -107,6 +112,43 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
         };
 
         return HttpResponse::Ok().json(signature_token);
+    }
+
+    if body.method == "sendTransaction" {
+        let tx = match body.params[0].as_str() {
+            Some(tx) => tx,
+            None => {
+                let error_message = "First parameter is not a string".to_string();
+                info!("{}", error_message);
+                return HttpResponse::BadRequest().body(error_message);
+            }
+        };
+        let decoded_data = match decode(tx) {
+            Ok(data) => data,
+            Err(_) => {
+                let error_message = "Failed to decode base64".to_string();
+                info!("{}", error_message);
+                return HttpResponse::BadRequest().body(error_message);
+            }
+        };
+
+        let separator = b':';
+
+        if let Some(pos) = decoded_data.iter().position(|&byte| byte == separator) {
+            let custom_data_part = &decoded_data[pos + 1..];
+
+            if let Ok(custom_data_str) = str::from_utf8(custom_data_part) {
+                let messages: Vec<String> =
+                    custom_data_str.split(':').map(|s| s.to_string()).collect();
+
+                let custom_data = FaasMessage { messages };
+                for message in custom_data.messages.iter() {
+                    println!("Message: {:?}", message);
+                }
+            } else {
+                println!("Failed to convert bytes to string");
+            }
+        }
     }
 
     let response = client.post(solana_url).json(&body).send().await;
