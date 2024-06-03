@@ -10,6 +10,10 @@ use std::str;
 use std::string::String;
 use std::sync::Arc;
 
+mod faas;
+
+use crate::faas::Faas;
+
 #[derive(Serialize, Deserialize)]
 pub struct RequestBody {
     id: String,
@@ -144,15 +148,23 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
             }
 
             if let Ok(fass_request_str) = str::from_utf8(fass_request_part) {
+                println!("faas messages: {:?}", fass_request_str);
                 let messages: Vec<String> =
                     fass_request_str.split(':').map(|s| s.to_string()).collect();
 
                 let fass_request = FaasMessage { messages };
                 for message in fass_request.messages.iter() {
-                    println!("Message: {:?}", message);
+                    println!("message: {:?}", message);
+                    if let Err(err) = Faas::call_service(message, tx_part).await {
+                        let error_message = format!("Error: {}", err);
+                        info!("{}", error_message);
+                        return HttpResponse::InternalServerError().body(error_message);
+                    };
                 }
             } else {
-                println!("Failed to convert bytes to string");
+                let error_message = "Failed to convert bytes to string".to_string();
+                info!("{}", error_message);
+                return HttpResponse::BadRequest().body(error_message);
             }
         }
     }
