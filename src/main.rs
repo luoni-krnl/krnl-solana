@@ -19,7 +19,7 @@ pub struct RequestBody {
     id: String,
     jsonrpc: String,
     method: String,
-    params: serde_json::Value,
+    params: Vec<Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,14 +79,15 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
     info!("Request Method: {:?}", body.method);
 
     if body.method == "krnl_transactionRequest" {
-        let tx_request: Vec<TxRequest> = match serde_json::from_value(body.params.clone()) {
-            Ok(tx_request) => tx_request,
-            Err(err) => {
-                let error_message = format!("Failed to deserialize TxRequest: {}", err);
-                info!("{}", error_message);
-                return HttpResponse::BadRequest().body(error_message);
-            }
-        };
+        let tx_request: Vec<TxRequest> =
+            match serde_json::from_value(serde_json::Value::Array(body.params.clone())) {
+                Ok(tx_request) => tx_request,
+                Err(err) => {
+                    let error_message = format!("Failed to deserialize TxRequest: {}", err);
+                    info!("{}", error_message);
+                    return HttpResponse::BadRequest().body(error_message);
+                }
+            };
 
         let tx_request_payload = match serde_json::to_vec(&tx_request[0]) {
             Ok(payload) => payload,
@@ -154,7 +155,7 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
                 let fass_request = FaasMessage { messages };
                 for message in fass_request.messages.iter() {
                     info!("faas message: {:?}", message);
-                    if let Err(err) = Faas::call_service(message, tx_part).await {
+                    if let Err(err) = Faas::call_service(message, tx_part, &client).await {
                         let error_message = format!("Error: {}", err);
                         info!("{}", error_message);
                         return HttpResponse::InternalServerError().body(error_message);
@@ -191,6 +192,9 @@ async fn proxy(req_body: web::Json<Value>, client: web::Data<Arc<Client>>) -> im
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
+
+    // let client = Arc::new(RpcClient::new("http://127.0.0.1:8899".to_string()));
+
     let client = Arc::new(Client::new());
 
     HttpServer::new(move || {
